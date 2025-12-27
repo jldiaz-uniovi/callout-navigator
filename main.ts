@@ -1,4 +1,4 @@
-import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab, App, Setting, Editor } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab, App, Setting, Editor, Notice } from 'obsidian';
 
 // Constants
 const VIEW_TYPE_CALLOUT_NAV = 'callout-navigator-view';
@@ -6,20 +6,24 @@ const VIEW_ICON = 'messages-square';
 
 // --- Interfaces & Default Settings ---
 
+// Definition of a single user configuration object
+interface CalloutUserConfig {
+    tag: string;
+    color: string;
+}
+
 interface CalloutNavigatorSettings {
-    user1Tag: string;
-    user1Color: string;
-    user2Tag: string;
-    user2Color: string;
-    authorName: string; 
+    authorName: string;
+    // We now store an array of users instead of fixed user1/user2 fields
+    users: CalloutUserConfig[];
 }
 
 const DEFAULT_SETTINGS: CalloutNavigatorSettings = {
-    user1Tag: 'Your Name',
-    user1Color: '#007AFF', 
-    user2Tag: 'Other Name',
-    user2Color: '#FF9500',
-    authorName: 'Your Name', 
+    authorName: 'me',
+    users: [
+        { tag: 'tag1', color: '#007AFF' },
+        { tag: 'tag2', color: '#FF9500' }
+    ]
 }
 
 interface CalloutComment {
@@ -36,13 +40,11 @@ export default class CalloutNavigatorPlugin extends Plugin {
     async onload() {
         await this.loadSettings();
 
-        // 1. Register View
         this.registerView(
             VIEW_TYPE_CALLOUT_NAV,
             (leaf) => new CalloutNavigatorView(leaf, this)
         );
 
-        // 2. Command: Open Sidebar
         this.addCommand({
             id: 'open-callout-navigator',
             name: 'Open Callout Navigator',
@@ -51,7 +53,6 @@ export default class CalloutNavigatorPlugin extends Plugin {
             }
         });
 
-        // 3. Command: Insert Callout
         this.addCommand({
             id: 'insert-comment-callout',
             name: 'Insert Comment Callout',
@@ -60,22 +61,19 @@ export default class CalloutNavigatorPlugin extends Plugin {
             }
         });
 
-        // 4. Ribbon Icon
         this.addRibbonIcon(VIEW_ICON, 'Open Callout Navigator', () => {
             this.activateView();
         });
 
-        // 5. Settings Tab
         this.addSettingTab(new CalloutNavigatorSettingTab(this.app, this));
     }
 
-    // --- Helper Logic for Insertion ---
-    
     insertCallout(editor: Editor) {
         const selection = editor.getSelection();
         const author = this.settings.authorName;
         const timestamp = this.getFormattedDate();
         
+        // Generic header format
         const header = `> [!${author}]- ${author} (${timestamp})`;
 
         if (selection) {
@@ -97,10 +95,14 @@ export default class CalloutNavigatorPlugin extends Plugin {
         return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
     }
 
-    // --- Standard Boilerplate ---
-
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        
+        // Migration check (simple): If old settings exist (user1Tag), reset to avoid errors
+        // or just let the default array take over if users property is missing.
+        if (!this.settings.users) {
+            this.settings.users = DEFAULT_SETTINGS.users;
+        }
     }
 
     async saveSettings() {
@@ -142,11 +144,10 @@ class CalloutNavigatorSettingTab extends PluginSettingTab {
 
         containerEl.createEl('h2', { text: 'Callout Navigator Settings' });
 
-        // Author Settings
-        containerEl.createEl('h3', { text: 'General' });
+        // --- General Settings ---
         new Setting(containerEl)
             .setName('My Author Name')
-            .setDesc('The name used when inserting new callouts with the command.')
+            .setDesc('Name used when inserting new callouts.')
             .addText(text => text
                 .setValue(this.plugin.settings.authorName)
                 .onChange(async (value) => {
@@ -154,45 +155,56 @@ class CalloutNavigatorSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
-        // Sidebar Tags
-        containerEl.createEl('h3', { text: 'Sidebar Tags Configuration' });
-        
-        // User 1
-        new Setting(containerEl)
-            .setName('User 1 Tag')
-            .addText(text => text
-                .setValue(this.plugin.settings.user1Tag)
+        // --- Dynamic User List ---
+        containerEl.createEl('h3', { text: 'Tracked Users' });
+        containerEl.createEl('p', { text: 'Add the callout tags you want to track in the sidebar.', style: 'color: var(--text-muted); font-size: 0.9em;' });
+
+        this.plugin.settings.users.forEach((user, index) => {
+            const setting = new Setting(containerEl)
+            .setName('User Tag')
+            .setDesc('Tag used in callouts to identify this user.');
+            
+            // 1. Input for Tag Name
+            setting.addText(text => text
+                .setPlaceholder('Tag (e.g. reviewer)')
+                .setValue(user.tag)
                 .onChange(async (value) => {
-                    this.plugin.settings.user1Tag = value;
-                    await this.plugin.saveSettings();
-                }));
-        
-        new Setting(containerEl)
-            .setName('User 1 Color')
-            .addColorPicker(color => color
-                .setValue(this.plugin.settings.user1Color)
-                .onChange(async (value) => {
-                    this.plugin.settings.user1Color = value;
+                    this.plugin.settings.users[index].tag = value;
                     await this.plugin.saveSettings();
                 }));
 
-        // User 2
-        new Setting(containerEl)
-            .setName('User 2 Tag')
-            .addText(text => text
-                .setValue(this.plugin.settings.user2Tag)
+            // 2. Color Picker
+            setting.addColorPicker(color => color
+                .setValue(user.color)
                 .onChange(async (value) => {
-                    this.plugin.settings.user2Tag = value;
+                    this.plugin.settings.users[index].color = value;
                     await this.plugin.saveSettings();
                 }));
 
-        new Setting(containerEl)
-            .setName('User 2 Color')
-            .addColorPicker(color => color
-                .setValue(this.plugin.settings.user2Color)
-                .onChange(async (value) => {
-                    this.plugin.settings.user2Color = value;
+            // 3. Remove Button
+            setting.addExtraButton(btn => btn
+                .setIcon('trash')
+                .setTooltip('Remove User')
+                .onClick(async () => {
+                    this.plugin.settings.users.splice(index, 1);
                     await this.plugin.saveSettings();
+                    // Reload the settings panel to reflect removal
+                    this.display(); 
+                }));
+        });
+
+        // Add New User Button
+        new Setting(containerEl)
+            .addButton(btn => btn
+                .setButtonText('Add User')
+                .setCta()
+                .onClick(async () => {
+                    this.plugin.settings.users.push({
+                        tag: 'new_user',
+                        color: '#888888'
+                    });
+                    await this.plugin.saveSettings();
+                    this.display(); // Reload panel
                 }));
     }
 }
@@ -247,7 +259,7 @@ class CalloutNavigatorView extends ItemView {
         if (comments.length === 0) {
             const emptyState = container.createDiv({ cls: 'nav-empty-state' });
             emptyState.createEl('p', { 
-                text: 'No conversation callouts found.', 
+                text: 'No tracked callouts found.', 
                 style: 'color: var(--text-muted); font-style: italic; padding: 10px;' 
             });
             return;
@@ -259,12 +271,17 @@ class CalloutNavigatorView extends ItemView {
     parseCallouts(content: string): CalloutComment[] {
         const lines = content.split('\n');
         const comments: CalloutComment[] = [];
-        
         const escapeRegExp = (string: string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const tag1 = escapeRegExp(this.plugin.settings.user1Tag);
-        const tag2 = escapeRegExp(this.plugin.settings.user2Tag);
         
-        const regexStr = `>\\s*\\[!(${tag1}|${tag2})\\][-+]?\\s*(.*)`;
+        // 1. Get all tags from settings
+        const users = this.plugin.settings.users;
+        
+        // If no users configured, return empty
+        if (users.length === 0) return [];
+
+        // 2. Build Regex dynamically: (tag1|tag2|tag3)
+        const tagsPattern = users.map(u => escapeRegExp(u.tag)).join('|');
+        const regexStr = `>\\s*\\[!(${tagsPattern})\\][-+]?\\s*(.*)`;
         const regex = new RegExp(regexStr, 'i');
 
         lines.forEach((line, index) => {
@@ -312,14 +329,11 @@ class CalloutNavigatorView extends ItemView {
             badge.style.padding = '2px 6px';
             badge.style.borderRadius = '4px';
             badge.style.lineHeight = '1.2';
-            
-            const s = this.plugin.settings;
-            if (comment.author === s.user1Tag.toLowerCase()) {
-                badge.style.backgroundColor = s.user1Color;
-            } else {
-                badge.style.backgroundColor = s.user2Color;
-            }
-            badge.style.color = '#ffffff'; 
+            badge.style.color = '#ffffff'; // Always white text
+
+            // Find color for this author
+            const matchedUser = this.plugin.settings.users.find(u => u.tag.toLowerCase() === comment.author);
+            badge.style.backgroundColor = matchedUser ? matchedUser.color : '#666666';
 
             const lineHint = header.createSpan({ text: `L:${comment.lineNumber + 1}` });
             lineHint.style.fontSize = '10px';
@@ -355,14 +369,8 @@ class CalloutNavigatorView extends ItemView {
             const view = leaf.view as MarkdownView;
             workspace.setActiveLeaf(leaf, { focus: true });
             
-            // UPDATED LOGIC:
-            // Calculate the line BEFORE the callout to avoid triggering Live Preview edit mode.
-            // Math.max(0, ...) ensures we don't crash if the callout is on the very first line (index 0).
             const targetLine = Math.max(0, lineNumber - 1);
-
             view.editor.setCursor({ line: targetLine, ch: 0 });
-            
-            // Still scroll the ACTUAL callout (lineNumber) into the center of the view
             view.editor.scrollIntoView(
                 { from: { line: lineNumber, ch: 0 }, to: { line: lineNumber, ch: 0 } },
                 true

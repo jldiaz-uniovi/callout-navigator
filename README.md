@@ -7,9 +7,9 @@ It is particularly useful for teams sharing a vault via Git, or for researchers 
 ## Features
 
 -   **Sidebar Index:** Lists all conversation/review callouts found in the current active file.
--   **Quick Navigation:** Clicking a comment in the sidebar scrolls the editor directly to that line (handling Live Preview correctly).
--   **Customizable Tags:** Define which callout types to track (e.g., `[!reviewer]`, `[!question]`, `[!todo]`).
--   **Visual Customization:** Assign specific colors to different authors or tag types for quick visual scanning.
+-   **Smart Navigation:** Clicking a comment in the sidebar scrolls the editor directly to that line (prevents triggering Live Preview edit mode by placing the cursor appropriately).
+-   **Dynamic Tag Configuration:** Track as many callout types as you need (e.g., `[!reviewer]`, `[!question]`, `[!todo]`).
+-   **Visual Customization:** Assign specific colors to each tag/author for quick visual scanning.
 -   **Quick Insert:** Command to wrap selected text in a timestamped comment block automatically.
 
 ## Installation
@@ -36,12 +36,13 @@ Since this plugin is not yet in the official Obsidian directory, the easiest way
 
 ### 1. Configuration
 Go to **Settings > Callout Navigator**.
-* **Tags:** Define the callout types you want to index. For example, if you set User 1 to `reviewer`, the plugin will look for:
-    ```markdown
-    > [!reviewer]
-    ```
-* **Colors:** Pick a background color for the badges in the sidebar to distinguish between authors.
-* **Author Name:** Set your own identifier (e.g., `me` or your name) for the insertion command.
+
+* **My Author Name:** Set your identifier (e.g., `me` or your name). This is used when you insert new comments.
+* **Tracked Users:** Here you can define which callout tags appear in the sidebar.
+    * Click **Add User** to track a new callout type.
+    * **Tag:** Enter the callout type (e.g., if you write `reviewer`, the plugin looks for `> [!reviewer]`).
+    * **Color:** Pick a background color for the badge in the sidebar.
+    * Use the **trash icon** to remove tags you no longer need.
 
 ### 2. Viewing Comments
 Open the command palette and run **"Callout Navigator: Open Callout Navigator"**, or click the **Message Square** icon in the right ribbon. The sidebar will populate with any matching callouts found in your current note.
@@ -65,5 +66,4 @@ If you want to modify this plugin:
 3. Run `npm run dev` to start compilation in watch mode.
 
 ## License
-
 MIT
