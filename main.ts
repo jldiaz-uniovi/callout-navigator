@@ -76,7 +76,7 @@ export default class CalloutNavigatorPlugin extends Plugin {
         const author = this.settings.authorName;
         const timestamp = this.getFormattedDate();
         
-        const header = `> [!${author}]- Comentario ${author} (${timestamp})`;
+        const header = `> [!${author}]- ${author} (${timestamp})`;
 
         if (selection) {
             const lines = selection.split('\n');
