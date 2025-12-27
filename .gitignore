@@ -1,0 +1,19 @@
+# Dependencias de Node (esto es lo más importante)
+node_modules/
+
+# Archivos de sistema y logs
+.DS_Store
+Thumbs.db
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Configuraciones locales del editor (opcional, pero recomendado)
+.idea/
+.vscode/
+
+# Build artifacts (El resultado de la compilación)
+# Lo estándar es NO subir el main.js al código fuente, 
+# sino subirlo a "Releases" en GitHub.
+main.js
+styles.css

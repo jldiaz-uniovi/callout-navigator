@@ -1,0 +1,21 @@
+{
+  "name": "callout-navigator",
+  "version": "1.0.0",
+  "description": "Sidebar navigation for conversation callouts",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "keywords": ["obsidian", "plugin"],
+  "author": "Jose",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^16.11.6",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "0.17.19",
+    "obsidian": "latest",
+    "tslib": "2.4.0",
+    "typescript": "4.7.4"
+  }
+}

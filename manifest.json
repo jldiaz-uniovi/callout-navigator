@@ -1,0 +1,10 @@
+{
+	"id": "callout-navigator",
+	"name": "Callout Navigator",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Displays a sidebar outline of conversation callouts.",
+	"author": "JL Diaz",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}
