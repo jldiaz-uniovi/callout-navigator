@@ -1,4 +1,4 @@
-import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab, App, Setting, Editor, Notice } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab, App, Setting, Editor, Notice, setIcon } from 'obsidian';
 
 // Constants
 const VIEW_TYPE_CALLOUT_NAV = 'callout-navigator-view';
@@ -16,6 +16,9 @@ interface CalloutNavigatorSettings {
     authorName: string;
     // We now store an array of users instead of fixed user1/user2 fields
     users: CalloutUserConfig[];
+    sortByTimestamp: boolean;
+    flattenChronological: boolean;
+    sortAscending: boolean;
 }
 
 const DEFAULT_SETTINGS: CalloutNavigatorSettings = {
@@ -23,13 +26,19 @@ const DEFAULT_SETTINGS: CalloutNavigatorSettings = {
     users: [
         { tag: 'tag1', color: '#007AFF' },
         { tag: 'tag2', color: '#FF9500' }
-    ]
+    ],
+    sortByTimestamp: false,
+    flattenChronological: true,
+    sortAscending: true
 }
 
 interface CalloutComment {
     lineNumber: number;
     author: string;
     content: string;
+    timestamp?: number;
+    level: number;
+    children: CalloutComment[];
 }
 
 // --- Main Plugin Class ---
@@ -155,9 +164,21 @@ class CalloutNavigatorSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 }));
 
+        new Setting(containerEl)
+            .setName('Flatten Chronological List')
+            .setDesc('If enabled, nested callouts will be flattened into a single list when sorting by timestamp.')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.flattenChronological)
+                .onChange(async (value) => {
+                    this.plugin.settings.flattenChronological = value;
+                    await this.plugin.saveSettings();
+                }));
+
         // --- Dynamic User List ---
         containerEl.createEl('h3', { text: 'Tracked Users' });
-        containerEl.createEl('p', { text: 'Add the callout tags you want to track in the sidebar.', style: 'color: var(--text-muted); font-size: 0.9em;' });
+        const helpText = containerEl.createEl('p', { text: 'Add the callout tags you want to track in the sidebar.' });
+        helpText.style.color = 'var(--text-muted)';
+        helpText.style.fontSize = '0.9em';
 
         this.plugin.settings.users.forEach((user, index) => {
             const setting = new Setting(containerEl)
@@ -213,6 +234,7 @@ class CalloutNavigatorSettingTab extends PluginSettingTab {
 
 class CalloutNavigatorView extends ItemView {
     plugin: CalloutNavigatorPlugin;
+    private lastUpdateId: number = 0;
 
     constructor(leaf: WorkspaceLeaf, plugin: CalloutNavigatorPlugin) {
         super(leaf);
@@ -239,30 +261,91 @@ class CalloutNavigatorView extends ItemView {
     }
 
     async updateView() {
+        const updateId = ++this.lastUpdateId;
         const activeFile = this.app.workspace.getActiveFile();
         const container = this.contentEl;
 
         if (!activeFile || activeFile.extension !== 'md') {
-            container.empty();
-            container.createEl('p', { 
-                text: 'No active markdown file.', 
-                style: 'color: var(--text-muted); padding: 10px;' 
-            });
+            if (updateId === this.lastUpdateId) {
+                container.empty();
+                const msg = container.createEl('p', { 
+                    text: 'No active markdown file.'
+                });
+                msg.style.color = 'var(--text-muted)';
+                msg.style.padding = '10px';
+            }
             return;
         }
 
         const content = await this.app.vault.read(activeFile);
-        const comments = this.parseCallouts(content);
+        
+        // If a newer update has started, discard this one
+        if (updateId !== this.lastUpdateId) return;
 
+        let comments = this.parseCallouts(content);
         container.empty();
 
         if (comments.length === 0) {
             const emptyState = container.createDiv({ cls: 'nav-empty-state' });
-            emptyState.createEl('p', { 
-                text: 'No tracked callouts found.', 
-                style: 'color: var(--text-muted); font-style: italic; padding: 10px;' 
+            const msg = emptyState.createEl('p', { 
+                text: 'No tracked callouts found.'
             });
+            msg.style.color = 'var(--text-muted)';
+            msg.style.fontStyle = 'italic';
+            msg.style.padding = '10px';
             return;
+        }
+
+        // Toolbar
+        const toolbar = container.createDiv();
+        toolbar.style.display = 'flex';
+        toolbar.style.justifyContent = 'flex-end';
+        toolbar.style.gap = '4px';
+        toolbar.style.padding = '4px 10px';
+        
+        // 1. Sort type button (Line vs Chronological)
+        const sortTypeBtn = toolbar.createEl('button', { 
+            cls: 'clickable-icon',
+            attr: { 'aria-label': this.plugin.settings.sortByTimestamp ? 'Switch to line order' : 'Switch to chronological order' }
+        });
+        setIcon(sortTypeBtn, this.plugin.settings.sortByTimestamp ? 'list-ordered' : 'clock');
+        
+        sortTypeBtn.addEventListener('click', async () => {
+            this.plugin.settings.sortByTimestamp = !this.plugin.settings.sortByTimestamp;
+            await this.plugin.saveSettings();
+            this.updateView();
+        });
+
+        // 2. Direction button (Asc vs Desc)
+        const directionBtn = toolbar.createEl('button', { 
+            cls: 'clickable-icon',
+            attr: { 'aria-label': this.plugin.settings.sortAscending ? 'Sort Descending' : 'Sort Ascending' }
+        });
+        setIcon(directionBtn, this.plugin.settings.sortAscending ? 'arrow-down' : 'arrow-up');
+        
+        directionBtn.addEventListener('click', async () => {
+            this.plugin.settings.sortAscending = !this.plugin.settings.sortAscending;
+            await this.plugin.saveSettings();
+            this.updateView();
+        });
+
+        // Apply sorting and structure logic
+        if (this.plugin.settings.sortByTimestamp) {
+            // Chronological order (always flattened if configured)
+            const getSortValue = (c: CalloutComment) => c.timestamp ?? 0;
+            const direction = this.plugin.settings.sortAscending ? 1 : -1;
+            comments.sort((a, b) => (getSortValue(a) - getSortValue(b)) * direction);
+
+            if (!this.plugin.settings.flattenChronological) {
+                comments = this.buildCommentTree(comments);
+            }
+        } else {
+            // Line order - Always nested
+            comments.sort((a, b) => a.lineNumber - b.lineNumber);
+            comments = this.buildCommentTree(comments);
+            if (!this.plugin.settings.sortAscending) {
+                comments.reverse(); // Only reverse top-level
+            }
         }
 
         this.renderCommentList(container, comments, activeFile);
@@ -281,21 +364,56 @@ class CalloutNavigatorView extends ItemView {
 
         // 2. Build Regex dynamically: (tag1|tag2|tag3)
         const tagsPattern = users.map(u => escapeRegExp(u.tag)).join('|');
-        const regexStr = `>\\s*\\[!(${tagsPattern})\\][-+]?\\s*(.*)`;
+        const regexStr = `^\\s*((?:\\s*>)+)\\s*\\[!(${tagsPattern})\\][-+]?\\s*(.*)`;
         const regex = new RegExp(regexStr, 'i');
 
         lines.forEach((line, index) => {
             const match = line.match(regex);
             if (match) {
+                const levels = (match[1].match(/>/g) || []).length;
+                const author = match[2].toLowerCase();
+                const contentText = match[3].trim() || 'Untitled';
+                
+                // Extract timestamp from contentText if present, e.g. "jose (2024-01-01 10:00)"
+                let timestamp: number | undefined;
+                const tsMatch = contentText.match(/\((\d{4}-\d{2}-\d{2}\s\d{2}:\d{2})\)/);
+                if (tsMatch) {
+                    // Replace space with T for Date.parse compatibility
+                    timestamp = Date.parse(tsMatch[1].replace(' ', 'T'));
+                }
+
                 comments.push({
                     lineNumber: index,
-                    author: match[1].toLowerCase(),
-                    content: match[2].trim() || 'Untitled'
+                    author: author,
+                    content: contentText,
+                    timestamp: timestamp,
+                    level: levels,
+                    children: []
                 });
             }
         });
 
         return comments;
+    }
+
+    buildCommentTree(flatComments: CalloutComment[]): CalloutComment[] {
+        const tree: CalloutComment[] = [];
+        const stack: CalloutComment[] = [];
+
+        flatComments.forEach(comment => {
+            while (stack.length > 0 && stack[stack.length - 1].level >= comment.level) {
+                stack.pop();
+            }
+
+            if (stack.length === 0) {
+                tree.push(comment);
+            } else {
+                stack[stack.length - 1].children.push(comment);
+            }
+            stack.push(comment);
+        });
+
+        return tree;
     }
 
     renderCommentList(container: HTMLElement, comments: CalloutComment[], file: TFile) {
@@ -305,8 +423,12 @@ class CalloutNavigatorView extends ItemView {
         list.style.gap = '8px';
         list.style.padding = '10px';
 
+        this.renderCommentsRecursive(list, comments, file);
+    }
+
+    renderCommentsRecursive(container: HTMLElement, comments: CalloutComment[], file: TFile) {
         comments.forEach(comment => {
-            const card = list.createEl('div');
+            const card = container.createEl('div');
             
             card.style.display = 'flex';
             card.style.flexDirection = 'column';
@@ -316,6 +438,7 @@ class CalloutNavigatorView extends ItemView {
             card.style.cursor = 'pointer';
             card.style.backgroundColor = 'var(--background-secondary)';
             card.style.transition = 'background-color 0.1s ease';
+            card.style.marginBottom = '4px';
 
             const header = card.createDiv();
             header.style.display = 'flex';
@@ -329,9 +452,8 @@ class CalloutNavigatorView extends ItemView {
             badge.style.padding = '2px 6px';
             badge.style.borderRadius = '4px';
             badge.style.lineHeight = '1.2';
-            badge.style.color = '#ffffff'; // Always white text
+            badge.style.color = '#ffffff'; 
 
-            // Find color for this author
             const matchedUser = this.plugin.settings.users.find(u => u.tag.toLowerCase() === comment.author);
             badge.style.backgroundColor = matchedUser ? matchedUser.color : '#666666';
 
@@ -346,16 +468,39 @@ class CalloutNavigatorView extends ItemView {
             body.style.textOverflow = 'ellipsis';
             body.style.color = 'var(--text-normal)';
 
-            card.addEventListener('mouseenter', () => {
+            card.addEventListener('mouseenter', (e) => {
+                e.stopPropagation();
                 card.style.backgroundColor = 'var(--background-modifier-hover)';
             });
-            card.addEventListener('mouseleave', () => {
+            card.addEventListener('mouseleave', (e) => {
+                e.stopPropagation();
                 card.style.backgroundColor = 'var(--background-secondary)';
             });
 
-            card.addEventListener('click', () => {
+            card.addEventListener('click', (e) => {
+                e.stopPropagation();
                 this.jumpToLine(file, comment.lineNumber);
             });
+
+            // Render children inside the parent card
+            if (comment.children.length > 0) {
+                const childrenContainer = card.createDiv();
+                childrenContainer.style.marginTop = '8px';
+                childrenContainer.style.paddingLeft = '12px';
+                childrenContainer.style.display = 'flex';
+                childrenContainer.style.flexDirection = 'column';
+                childrenContainer.style.gap = '8px';
+
+                let childrenToRender = [...comment.children];
+                if (this.plugin.settings.sortByTimestamp) {
+                    const getSortValue = (c: CalloutComment) => c.timestamp ?? 0;
+                    const direction = this.plugin.settings.sortAscending ? 1 : -1;
+                    childrenToRender.sort((a, b) => (getSortValue(a) - getSortValue(b)) * direction);
+                } else if (!this.plugin.settings.sortAscending) {
+                    childrenToRender.reverse();
+                }
+                this.renderCommentsRecursive(childrenContainer, childrenToRender, file);
+            }
         });
     }
 
