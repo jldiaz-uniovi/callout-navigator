@@ -235,6 +235,7 @@ class CalloutNavigatorSettingTab extends PluginSettingTab {
 class CalloutNavigatorView extends ItemView {
     plugin: CalloutNavigatorPlugin;
     private lastUpdateId: number = 0;
+    private highlightedLineNumber: number | null = null;
 
     constructor(leaf: WorkspaceLeaf, plugin: CalloutNavigatorPlugin) {
         super(leaf);
@@ -258,9 +259,13 @@ class CalloutNavigatorView extends ItemView {
         this.registerEvent(this.app.workspace.on('file-open', () => this.updateView()));
         this.registerEvent(this.app.workspace.on('editor-change', () => this.updateView()));
         this.registerEvent(this.app.workspace.on('callout-navigator:settings-changed' as any, () => this.updateView()));
+        
+        this.registerDomEvent(document, 'mouseover', this.handleMouseOver.bind(this));
+        this.registerDomEvent(document, 'mouseout', this.handleMouseOut.bind(this));
     }
 
     async updateView() {
+        this.highlightedLineNumber = null;
         const updateId = ++this.lastUpdateId;
         const activeFile = this.app.workspace.getActiveFile();
         const container = this.contentEl;
@@ -429,6 +434,7 @@ class CalloutNavigatorView extends ItemView {
     renderCommentsRecursive(container: HTMLElement, comments: CalloutComment[], file: TFile) {
         comments.forEach(comment => {
             const card = container.createEl('div');
+            card.dataset.lineNumber = String(comment.lineNumber);
             
             card.style.display = 'flex';
             card.style.flexDirection = 'column';
@@ -437,7 +443,7 @@ class CalloutNavigatorView extends ItemView {
             card.style.border = '1px solid var(--background-modifier-border)';
             card.style.cursor = 'pointer';
             card.style.backgroundColor = 'var(--background-secondary)';
-            card.style.transition = 'background-color 0.1s ease';
+            card.style.transition = 'all 0.2s ease-in-out';
             card.style.marginBottom = '4px';
 
             const header = card.createDiv();
@@ -523,5 +529,86 @@ class CalloutNavigatorView extends ItemView {
         } else {
              workspace.openLinkText(file.path, '', true);
         }
+    }
+
+    getTrackedCalloutHeaderRegex(): RegExp | null {
+        const users = this.plugin.settings.users;
+        if (users.length === 0) return null;
+        const escapeRegExp = (string: string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const tagsPattern = users.map(u => escapeRegExp(u.tag)).join('|');
+        return new RegExp(`^\\s*((?:\\s*>)+)\\s*\\[!(${tagsPattern})\\][-+]?\\s*(.*)`, 'i');
+    }
+
+    handleMouseOver(e: MouseEvent) {
+        const target = e.target as HTMLElement;
+        const calloutEl = target.closest('.callout');
+        if (!calloutEl) {
+            this.clearHighlight();
+            return;
+        }
+
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeView) return;
+        const cm = (activeView.editor as any).cm;
+        if (!cm) return;
+
+        try {
+            const pos = cm.posAtDOM(calloutEl);
+            const line = cm.state.doc.lineAt(pos);
+            const hoveredLine = line.number - 1; // 0-indexed
+
+            const regex = this.getTrackedCalloutHeaderRegex();
+            if (!regex) return;
+
+            let currentLine = hoveredLine;
+            while (currentLine >= 0) {
+                const lineText = cm.state.doc.line(currentLine + 1).text;
+                const match = lineText.match(regex);
+                if (match) {
+                    this.highlightCard(currentLine);
+                    return;
+                }
+                // If we exit blockquote block, stop
+                if (!/^\s*>/.test(lineText)) {
+                    break;
+                }
+                currentLine--;
+            }
+            this.clearHighlight();
+        } catch (err) {
+            // Element not in editor/CodeMirror tree or other exception
+        }
+    }
+
+    handleMouseOut(e: MouseEvent) {
+        const target = e.relatedTarget as HTMLElement;
+        if (!target || !target.closest('.callout')) {
+            this.clearHighlight();
+        }
+    }
+
+    highlightCard(lineNumber: number) {
+        if (this.highlightedLineNumber === lineNumber) return;
+        this.clearHighlight();
+
+        const cards = this.contentEl.querySelectorAll(`[data-line-number="${lineNumber}"]`);
+        cards.forEach((card: HTMLElement) => {
+            card.style.borderColor = 'var(--interactive-accent)';
+            card.style.boxShadow = '0 0 8px var(--interactive-accent)';
+            card.style.transform = 'scale(1.02)';
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
+        this.highlightedLineNumber = lineNumber;
+    }
+
+    clearHighlight() {
+        if (this.highlightedLineNumber === null) return;
+        const cards = this.contentEl.querySelectorAll(`[data-line-number="${this.highlightedLineNumber}"]`);
+        cards.forEach((card: HTMLElement) => {
+            card.style.borderColor = 'var(--background-modifier-border)';
+            card.style.boxShadow = 'none';
+            card.style.transform = 'none';
+        });
+        this.highlightedLineNumber = null;
     }
 }
