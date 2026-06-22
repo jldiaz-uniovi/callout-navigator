@@ -236,6 +236,7 @@ class CalloutNavigatorView extends ItemView {
     plugin: CalloutNavigatorPlugin;
     private lastUpdateId: number = 0;
     private highlightedLineNumber: number | null = null;
+    private currentlyHoveredCalloutEl: HTMLElement | null = null;
 
     constructor(leaf: WorkspaceLeaf, plugin: CalloutNavigatorPlugin) {
         super(leaf);
@@ -282,7 +283,13 @@ class CalloutNavigatorView extends ItemView {
             return;
         }
 
-        const content = await this.app.vault.read(activeFile);
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        let content = "";
+        if (activeView && activeView.file?.path === activeFile.path) {
+            content = activeView.editor.getValue();
+        } else {
+            content = await this.app.vault.read(activeFile);
+        }
         
         // If a newer update has started, discard this one
         if (updateId !== this.lastUpdateId) return;
@@ -354,6 +361,10 @@ class CalloutNavigatorView extends ItemView {
         }
 
         this.renderCommentList(container, comments, activeFile);
+
+        if (this.currentlyHoveredCalloutEl) {
+            this.refreshHoverHighlight();
+        }
     }
 
     parseCallouts(content: string): CalloutComment[] {
@@ -541,11 +552,14 @@ class CalloutNavigatorView extends ItemView {
 
     handleMouseOver(e: MouseEvent) {
         const target = e.target as HTMLElement;
-        const calloutEl = target.closest('.callout');
+        const calloutEl = target.closest('.callout') as HTMLElement | null;
         if (!calloutEl) {
+            this.currentlyHoveredCalloutEl = null;
             this.clearHighlight();
             return;
         }
+
+        this.currentlyHoveredCalloutEl = calloutEl;
 
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!activeView) return;
@@ -583,6 +597,41 @@ class CalloutNavigatorView extends ItemView {
     handleMouseOut(e: MouseEvent) {
         const target = e.relatedTarget as HTMLElement;
         if (!target || !target.closest('.callout')) {
+            this.currentlyHoveredCalloutEl = null;
+            this.clearHighlight();
+        }
+    }
+
+    refreshHoverHighlight() {
+        if (!this.currentlyHoveredCalloutEl) return;
+        const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!activeView) return;
+        const cm = (activeView.editor as any).cm;
+        if (!cm) return;
+
+        try {
+            const pos = cm.posAtDOM(this.currentlyHoveredCalloutEl);
+            const line = cm.state.doc.lineAt(pos);
+            const hoveredLine = line.number - 1;
+
+            const regex = this.getTrackedCalloutHeaderRegex();
+            if (!regex) return;
+
+            let currentLine = hoveredLine;
+            while (currentLine >= 0) {
+                const lineText = cm.state.doc.line(currentLine + 1).text;
+                const match = lineText.match(regex);
+                if (match) {
+                    this.highlightCard(currentLine);
+                    return;
+                }
+                if (!/^\s*>/.test(lineText)) {
+                    break;
+                }
+                currentLine--;
+            }
+            this.clearHighlight();
+        } catch (err) {
             this.clearHighlight();
         }
     }
