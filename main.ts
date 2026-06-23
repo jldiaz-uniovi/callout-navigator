@@ -2,7 +2,7 @@ import { Plugin, ItemView, WorkspaceLeaf, MarkdownView, TFile, PluginSettingTab,
 
 // Constants
 const VIEW_TYPE_CALLOUT_NAV = 'callout-navigator-view';
-const VIEW_ICON = 'messages-square'; 
+const VIEW_ICON = 'messages-square';
 
 // --- Interfaces & Default Settings ---
 
@@ -64,9 +64,17 @@ export default class CalloutNavigatorPlugin extends Plugin {
 
         this.addCommand({
             id: 'insert-comment-callout',
-            name: 'Insert Comment Callout',
+            name: 'Insert Comment Callout (Collapsed)',
             editorCallback: (editor: Editor, view: MarkdownView) => {
-                this.insertCallout(editor);
+                this.insertCallout(editor, true);
+            }
+        });
+
+        this.addCommand({
+            id: 'insert-comment-callout-expanded',
+            name: 'Insert Comment Callout (Expanded)',
+            editorCallback: (editor: Editor, view: MarkdownView) => {
+                this.insertCallout(editor, false);
             }
         });
 
@@ -77,13 +85,14 @@ export default class CalloutNavigatorPlugin extends Plugin {
         this.addSettingTab(new CalloutNavigatorSettingTab(this.app, this));
     }
 
-    insertCallout(editor: Editor) {
+    insertCallout(editor: Editor, collapsed: boolean) {
         const selection = editor.getSelection();
         const author = this.settings.authorName;
         const timestamp = this.getFormattedDate();
-        
-        // Generic header format
-        const header = `> [!${author}]- ${author} (${timestamp})`;
+
+        // Generic header format: [!author]- for collapsed, [!author]+ for expanded
+        const symbol = collapsed ? '-' : '+';
+        const header = `> [!${author}]${symbol} ${author} (${timestamp})`;
 
         if (selection) {
             const lines = selection.split('\n');
@@ -106,7 +115,7 @@ export default class CalloutNavigatorPlugin extends Plugin {
 
     async loadSettings() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-        
+
         // Migration check (simple): If old settings exist (user1Tag), reset to avoid errors
         // or just let the default array take over if users property is missing.
         if (!this.settings.users) {
@@ -182,9 +191,9 @@ class CalloutNavigatorSettingTab extends PluginSettingTab {
 
         this.plugin.settings.users.forEach((user, index) => {
             const setting = new Setting(containerEl)
-            .setName('User Tag')
-            .setDesc('Tag used in callouts to identify this user.');
-            
+                .setName('User Tag')
+                .setDesc('Tag used in callouts to identify this user.');
+
             // 1. Input for Tag Name
             setting.addText(text => text
                 .setPlaceholder('Tag (e.g. reviewer)')
@@ -210,7 +219,7 @@ class CalloutNavigatorSettingTab extends PluginSettingTab {
                     this.plugin.settings.users.splice(index, 1);
                     await this.plugin.saveSettings();
                     // Reload the settings panel to reflect removal
-                    this.display(); 
+                    this.display();
                 }));
         });
 
@@ -258,9 +267,10 @@ class CalloutNavigatorView extends ItemView {
     async onOpen() {
         this.updateView();
         this.registerEvent(this.app.workspace.on('file-open', () => this.updateView()));
+        this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.updateView()));
         this.registerEvent(this.app.workspace.on('editor-change', () => this.updateView()));
         this.registerEvent(this.app.workspace.on('callout-navigator:settings-changed' as any, () => this.updateView()));
-        
+
         this.registerDomEvent(document, 'mouseover', this.handleMouseOver.bind(this));
         this.registerDomEvent(document, 'mouseout', this.handleMouseOut.bind(this));
     }
@@ -274,7 +284,7 @@ class CalloutNavigatorView extends ItemView {
         if (!activeFile || activeFile.extension !== 'md') {
             if (updateId === this.lastUpdateId) {
                 container.empty();
-                const msg = container.createEl('p', { 
+                const msg = container.createEl('p', {
                     text: 'No active markdown file.'
                 });
                 msg.style.color = 'var(--text-muted)';
@@ -290,7 +300,7 @@ class CalloutNavigatorView extends ItemView {
         } else {
             content = await this.app.vault.read(activeFile);
         }
-        
+
         // If a newer update has started, discard this one
         if (updateId !== this.lastUpdateId) return;
 
@@ -299,7 +309,7 @@ class CalloutNavigatorView extends ItemView {
 
         if (comments.length === 0) {
             const emptyState = container.createDiv({ cls: 'nav-empty-state' });
-            const msg = emptyState.createEl('p', { 
+            const msg = emptyState.createEl('p', {
                 text: 'No tracked callouts found.'
             });
             msg.style.color = 'var(--text-muted)';
@@ -314,14 +324,14 @@ class CalloutNavigatorView extends ItemView {
         toolbar.style.justifyContent = 'flex-end';
         toolbar.style.gap = '4px';
         toolbar.style.padding = '4px 10px';
-        
+
         // 1. Sort type button (Line vs Chronological)
-        const sortTypeBtn = toolbar.createEl('button', { 
+        const sortTypeBtn = toolbar.createEl('button', {
             cls: 'clickable-icon',
             attr: { 'aria-label': this.plugin.settings.sortByTimestamp ? 'Switch to line order' : 'Switch to chronological order' }
         });
         setIcon(sortTypeBtn, this.plugin.settings.sortByTimestamp ? 'list-ordered' : 'clock');
-        
+
         sortTypeBtn.addEventListener('click', async () => {
             this.plugin.settings.sortByTimestamp = !this.plugin.settings.sortByTimestamp;
             await this.plugin.saveSettings();
@@ -329,12 +339,12 @@ class CalloutNavigatorView extends ItemView {
         });
 
         // 2. Direction button (Asc vs Desc)
-        const directionBtn = toolbar.createEl('button', { 
+        const directionBtn = toolbar.createEl('button', {
             cls: 'clickable-icon',
             attr: { 'aria-label': this.plugin.settings.sortAscending ? 'Sort Descending' : 'Sort Ascending' }
         });
         setIcon(directionBtn, this.plugin.settings.sortAscending ? 'arrow-down' : 'arrow-up');
-        
+
         directionBtn.addEventListener('click', async () => {
             this.plugin.settings.sortAscending = !this.plugin.settings.sortAscending;
             await this.plugin.saveSettings();
@@ -371,10 +381,10 @@ class CalloutNavigatorView extends ItemView {
         const lines = content.split('\n');
         const comments: CalloutComment[] = [];
         const escapeRegExp = (string: string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        
+
         // 1. Get all tags from settings
         const users = this.plugin.settings.users;
-        
+
         // If no users configured, return empty
         if (users.length === 0) return [];
 
@@ -389,7 +399,7 @@ class CalloutNavigatorView extends ItemView {
                 const levels = (match[1].match(/>/g) || []).length;
                 const author = match[2].toLowerCase();
                 const contentText = match[3].trim() || 'Untitled';
-                
+
                 // Extract timestamp from contentText if present, e.g. "jose (2024-01-01 10:00)"
                 let timestamp: number | undefined;
                 const tsMatch = contentText.match(/\((\d{4}-\d{2}-\d{2}\s\d{2}:\d{2})\)/);
@@ -446,16 +456,18 @@ class CalloutNavigatorView extends ItemView {
         comments.forEach(comment => {
             const card = container.createEl('div');
             card.dataset.lineNumber = String(comment.lineNumber);
-            
+
             card.style.display = 'flex';
             card.style.flexDirection = 'column';
             card.style.padding = '8px';
-            card.style.borderRadius = '6px';
+            card.style.borderRadius = '4px';
             card.style.border = '1px solid var(--background-modifier-border)';
             card.style.cursor = 'pointer';
             card.style.backgroundColor = 'var(--background-secondary)';
-            card.style.transition = 'all 0.2s ease-in-out';
-            card.style.marginBottom = '4px';
+            card.style.transition = 'background-color 0.1s ease';
+            card.style.marginBottom = '2px';
+            card.style.gap = '2px';
+            card.style.padding = '4px 6px'; // Reduced from original 8px
 
             const header = card.createDiv();
             header.style.display = 'flex';
@@ -469,7 +481,7 @@ class CalloutNavigatorView extends ItemView {
             badge.style.padding = '2px 6px';
             badge.style.borderRadius = '4px';
             badge.style.lineHeight = '1.2';
-            badge.style.color = '#ffffff'; 
+            badge.style.color = '#ffffff';
 
             const matchedUser = this.plugin.settings.users.find(u => u.tag.toLowerCase() === comment.author);
             badge.style.backgroundColor = matchedUser ? matchedUser.color : '#666666';
@@ -502,11 +514,11 @@ class CalloutNavigatorView extends ItemView {
             // Render children inside the parent card
             if (comment.children.length > 0) {
                 const childrenContainer = card.createDiv();
-                childrenContainer.style.marginTop = '8px';
-                childrenContainer.style.paddingLeft = '12px';
+                childrenContainer.style.marginTop = '4px';
+                childrenContainer.style.paddingLeft = '4px';
                 childrenContainer.style.display = 'flex';
                 childrenContainer.style.flexDirection = 'column';
-                childrenContainer.style.gap = '8px';
+                childrenContainer.style.gap = '4px';
 
                 let childrenToRender = [...comment.children];
                 if (this.plugin.settings.sortByTimestamp) {
@@ -530,15 +542,40 @@ class CalloutNavigatorView extends ItemView {
         if (leaf) {
             const view = leaf.view as MarkdownView;
             workspace.setActiveLeaf(leaf, { focus: true });
-            
-            const targetLine = Math.max(0, lineNumber - 1);
-            view.editor.setCursor({ line: targetLine, ch: 0 });
-            view.editor.scrollIntoView(
-                { from: { line: lineNumber, ch: 0 }, to: { line: lineNumber, ch: 0 } },
-                true
-            );
+
+            if (view.getMode() === 'source') {
+                const targetLine = Math.max(0, lineNumber);
+                view.editor.setCursor({ line: targetLine, ch: 0 });
+                view.editor.scrollIntoView(
+                    { from: { line: targetLine, ch: 0 }, to: { line: targetLine, ch: 0 } },
+                    true
+                );
+            } else {
+                // Reading mode
+                // Note: Reading mode line numbers are 0-based in some contexts but 1-based in others.
+                // Obsidian's setEphemeralState 'line' for Reading Mode highlights the nth block.
+                leaf.setEphemeralState({ line: lineNumber });
+
+                // Auto-expand callout if collapsed in Reading Mode
+                // We use a MutationObserver or a slightly longer delay to ensure DOM is ready
+                setTimeout(() => {
+                    const viewEl = view.contentEl;
+                    // Find the element that is highlighted (Obsidian adds a class or scrolls to it)
+                    // We look for callouts that are currently in view and collapsed
+                    const callouts = viewEl.querySelectorAll('.callout.is-collapsed');
+                    callouts.forEach((callout: HTMLElement) => {
+                        const rect = callout.getBoundingClientRect();
+                        const winH = window.innerHeight;
+                        // If it's roughly in the middle of the screen (where Obsidian scrolls to)
+                        if (rect.top > winH * 0.1 && rect.top < winH * 0.8) {
+                            const titleEl = callout.querySelector('.callout-title') as HTMLElement;
+                            if (titleEl) titleEl.click(); // Simulate click to trigger Obsidian's internal toggle
+                        }
+                    });
+                }, 150);
+            }
         } else {
-             workspace.openLinkText(file.path, '', true);
+            workspace.openLinkText(file.path, '', true);
         }
     }
 
